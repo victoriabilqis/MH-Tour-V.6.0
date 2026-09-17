@@ -1,1 +1,88 @@
 
+name: MH Tour V6.0 Release APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - 'android/**'
+      - '.github/workflows/build-release.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mh-tour-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-release:
+    name: Build MH Tour V6.0 Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Validate Android project
+        run: |
+          set -euo pipefail
+          test -f android/settings.gradle.kts
+          test -f android/build.gradle.kts
+          test -f android/app/build.gradle.kts
+          test -f android/app/src/main/AndroidManifest.xml
+          test -f android/app/src/main/java/com/mhtour/audio/MainActivity.kt
+
+      - name: Configure release signing
+        if: ${{ secrets.MH_KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_B64: ${{ secrets.MH_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mh-tour-signing"
+          echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/mh-tour-signing/release.jks"
+          {
+            echo "MH_KEYSTORE_FILE=$RUNNER_TEMP/mh-tour-signing/release.jks"
+            echo "MH_KEYSTORE_PASSWORD=${{ secrets.MH_KEYSTORE_PASSWORD }}"
+            echo "MH_KEY_ALIAS=${{ secrets.MH_KEY_ALIAS }}"
+            echo "MH_KEY_PASSWORD=${{ secrets.MH_KEY_PASSWORD }}"
+          } >> "$GITHUB_ENV"
+
+      - name: Build release APK
+        working-directory: android
+        run: |
+          gradle --no-daemon --stacktrace --warning-mode all \
+            -PMH_KEYSTORE_FILE="${MH_KEYSTORE_FILE:-}" \
+            -PMH_KEYSTORE_PASSWORD="${MH_KEYSTORE_PASSWORD:-}" \
+            -PMH_KEY_ALIAS="${MH_KEY_ALIAS:-}" \
+            -PMH_KEY_PASSWORD="${MH_KEY_PASSWORD:-}" \
+            clean assembleRelease
+
+      - name: Rename and verify APK
+        run: |
+          set -euo pipefail
+          SOURCE="android/app/build/outputs/apk/release/app-release.apk"
+          test -s "$SOURCE"
+          mkdir -p release-artifact
+          cp "$SOURCE" "release-artifact/MH Tour V.6.0.apk"
+          test -s "release-artifact/MH Tour V.6.0.apk"
+          ls -lh "release-artifact/MH Tour V.6.0.apk"
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Tour-V6.0-Release-APK
+          path: release-artifact/MH Tour V.6.0.apk
+          if-no-files-found: error
+          retention-days: 30
